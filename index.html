@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KIMNET - Central de Atendimento</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         .bg-matrix { background-color: #0a2540; }
@@ -81,38 +82,63 @@
     </div>
 
     <script>
-        const channel = new BroadcastChannel('kimnet_chat_channel');
+        // CONFIGURAÇÃO DO SUPABASE (Substitua pelas suas chaves gratuitas do Supabase)
+        const SUPABASE_URL = 'SUA_URL_DO_SUPABASE';
+        const SUPABASE_KEY = 'SUA_CHAVE_ANON_DO_SUPABASE';
+        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
-        document.getElementById('start-chat-form').addEventListener('submit', function(e) {
+        let currentProtocol = null;
+
+        document.getElementById('start-chat-form').addEventListener('submit', async function(e) {
             e.preventDefault();
 
             const name = document.getElementById('client-name').value;
             const doc = document.getElementById('client-document').value;
             const subject = document.getElementById('client-subject').value;
-            const protocol = 'PROT-' + Math.floor(10000 + Math.random() * 90000);
+            currentProtocol = 'PROT-' + Math.floor(10000 + Math.random() * 90000);
 
-            const sessionData = { protocol, clientName: name, document: doc, subject };
+            // Criar chamado no banco de dados na nuvem
+            const { error } = await supabase.from('tickets').insert([
+                { protocol: currentProtocol, client_name: name, document: doc, subject: subject, status: 'open' }
+            ]);
 
-            // Dispara a criação do chamado para o painel do agente
-            channel.postMessage({ type: 'NEW_TICKET', data: sessionData });
+            if (error) {
+                alert('Erro ao iniciar chat. Verifique as credenciais do Supabase.');
+                return;
+            }
 
             document.getElementById('client-screen').classList.add('hidden');
             document.getElementById('chat-screen').classList.remove('hidden');
-            document.getElementById('chat-protocol').innerText = protocol;
+            document.getElementById('chat-protocol').innerText = currentProtocol;
 
-            appendMessage('sistema', `Olá, ${name}! Seu atendimento foi iniciado sob o protocolo ${protocol}. Aguarde um instante.`);
+            appendMessage('sistema', `Olá, ${name}! Seu atendimento foi iniciado sob o protocolo ${currentProtocol}. Aguarde um instante.`);
+
+            // Escutar novas mensagens do agente para este protocolo
+            supabase
+              .channel('room_' + currentProtocol)
+              .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `protocol=eq.${currentProtocol}` }, payload => {
+                  if (payload.new.sender === 'agente') {
+                      appendMessage('agente', payload.new.message);
+                  }
+              })
+              .subscribe();
         });
 
         document.getElementById('send-btn').addEventListener('click', sendMessage);
         document.getElementById('chat-input').addEventListener('keypress', (e) => { if (e.key === 'Enter') sendMessage(); });
 
-        function sendMessage() {
+        async function sendMessage() {
             const input = document.getElementById('chat-input');
             const text = input.value.trim();
-            if (!text) return;
+            if (!text || !currentProtocol) return;
 
             appendMessage('cliente', text);
-            channel.postMessage({ type: 'CLIENT_MESSAGE', text: text });
+
+            // Enviar mensagem para a nuvem
+            await supabase.from('messages').insert([
+                { protocol: currentProtocol, sender: 'cliente', message: text }
+            ]);
+
             input.value = '';
         }
 
@@ -135,12 +161,6 @@
             container.appendChild(msgDiv);
             container.scrollTop = container.scrollHeight;
         }
-
-        channel.onmessage = (event) => {
-            if (event.data.type === 'AGENT_MESSAGE') {
-                appendMessage('agente', event.data.text);
-            }
-        };
     </script>
 </body>
 </html>
