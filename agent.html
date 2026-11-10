@@ -5,6 +5,7 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>KIMNET - Painel do Agente (SAC/Telecom)</title>
     <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2"></script>
     <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css" rel="stylesheet">
     <style>
         .bg-matrix-dark { background-color: #061527; }
@@ -25,7 +26,7 @@
         </div>
         <div class="flex items-center gap-2 bg-slate-900/80 px-3 py-1.5 rounded-full border border-slate-700 text-xs">
             <span class="w-2.5 h-2.5 bg-green-500 rounded-full animate-pulse"></span>
-            <span class="text-slate-300 font-medium">Agente Conectado</span>
+            <span class="text-slate-300 font-medium">Agente Conectado (Nuvem)</span>
         </div>
     </header>
 
@@ -94,7 +95,11 @@
     </div>
 
     <script>
-        const channel = new BroadcastChannel('kimnet_chat_channel');
+        // CONFIGURAÇÃO DO SUPABASE (Mesmas credenciais)
+        const SUPABASE_URL = 'SUA_URL_DO_SUPABASE';
+        const SUPABASE_KEY = 'SUA_CHAVE_ANON_DO_SUPABASE';
+        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
         let tickets = [];
         let activeTicketProtocol = null;
 
@@ -110,30 +115,38 @@
             } catch(e) {}
         }
 
-        channel.onmessage = (event) => {
-            const data = event.data;
-            if (data.type === 'NEW_TICKET') {
-                playAlertSound();
-                tickets.push({
-                    protocol: data.data.protocol,
-                    clientName: data.data.clientName,
-                    document: data.data.document,
-                    subject: data.data.subject,
-                    messages: [{ sender: 'sistema', text: `Atendimento iniciado via formulário.` }]
-                });
+        // Carregar chamados abertos ao iniciar o painel
+        async function loadTickets() {
+            const { data, error } = await supabase.from('tickets').select('*').eq('status', 'open');
+            if (data) {
+                tickets = data.map(t => ({
+                    protocol: t.protocol,
+                    clientName: t.client_name,
+                    document: t.document,
+                    subject: t.subject,
+                    messages: []
+                }));
                 renderTicketsList();
-                if (!activeTicketProtocol) selectTicket(data.data.protocol);
-            } else if (data.type === 'CLIENT_MESSAGE') {
-                if (activeTicketProtocol) {
-                    playAlertSound();
-                    const ticket = tickets.find(t => t.protocol === activeTicketProtocol);
-                    if (ticket) {
-                        ticket.messages.push({ sender: 'cliente', text: data.text });
-                        renderMessages();
-                    }
-                }
             }
-        };
+        }
+        loadTickets();
+
+        // Ouvir novos clientes entrando na nuvem em tempo real
+        supabase
+          .channel('public:tickets')
+          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tickets' }, payload => {
+              playAlertSound();
+              tickets.push({
+                  protocol: payload.new.protocol,
+                  clientName: payload.new.client_name,
+                  document: payload.new.document,
+                  subject: payload.new.subject,
+                  messages: []
+              });
+              renderTicketsList();
+              if (!activeTicketProtocol) selectTicket(payload.new.protocol);
+          })
+          .subscribe();
 
         function renderTicketsList() {
             const container = document.getElementById('tickets-list');
@@ -160,7 +173,7 @@
             });
         }
 
-        function selectTicket(protocol) {
+        async function selectTicket(protocol) {
             activeTicketProtocol = protocol;
             const ticket = tickets.find(t => t.protocol === protocol);
             if (!ticket) return;
@@ -175,8 +188,24 @@
             document.getElementById('info-doc').innerText = ticket.document;
             document.getElementById('info-subject').innerText = ticket.subject;
 
+            // Buscar histórico de mensagens da nuvem
+            const { data } = await supabase.from('messages').select('*').eq('protocol', protocol).order('created_at', { ascending: true });
+            ticket.messages = data ? data.map(m => ({ sender: m.sender, text: m.message })) : [];
+
             renderTicketsList();
             renderMessages();
+
+            // Inscrever para escutar novas mensagens deste chat específico
+            supabase
+              .channel('room_agent_' + protocol)
+              .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `protocol=eq.${protocol}` }, payload => {
+                  if (payload.new.sender === 'cliente') {
+                      playAlertSound();
+                      ticket.messages.push({ sender: 'cliente', text: payload.new.message });
+                      renderMessages();
+                  }
+              })
+              .subscribe();
         }
 
         function renderMessages() {
@@ -187,19 +216,14 @@
 
             ticket.messages.forEach(msg => {
                 const msgDiv = document.createElement('div');
-                if (msg.sender === 'sistema') {
-                    msgDiv.className = 'text-center text-xs text-slate-400 my-2 bg-slate-950 py-1 px-3 rounded-md w-fit mx-auto border border-slate-800';
-                    msgDiv.innerText = msg.text;
-                } else {
-                    const isAgent = msg.sender === 'agente';
-                    msgDiv.className = `flex ${isAgent ? 'justify-end' : 'justify-start'}`;
-                    msgDiv.innerHTML = `
-                        <div class="max-w-[75%] rounded-xl px-4 py-2.5 text-sm ${isAgent ? 'bg-blue-600 text-white rounded-br-none' : 'bg-slate-800 text-slate-200 border border-slate-700 rounded-bl-none'}">
-                            <span class="text-[10px] block opacity-70 mb-1 font-semibold">${isAgent ? 'Você (Agente)' : ticket.clientName}</span>
-                            ${msg.text}
-                        </div>
-                    `;
-                }
+                const isAgent = msg.sender === 'agente';
+                msgDiv.className = `flex ${isAgent ? 'justify-end' : 'justify-start'}`;
+                msgDiv.innerHTML = `
+                    <div class="max-w-[75%] rounded-xl px-4 py-2.5 text-sm ${isAgent ? 'bg-blue-600 text-white rounded-br-none' : 'bg-slate-800 text-slate-200 border border-slate-700 rounded-bl-none'}">
+                        <span class="text-[10px] block opacity-70 mb-1 font-semibold">${isAgent ? 'Você (Agente)' : ticket.clientName}</span>
+                        ${msg.text}
+                    </div>
+                `;
                 container.appendChild(msgDiv);
             });
             container.scrollTop = container.scrollHeight;
@@ -208,7 +232,7 @@
         document.getElementById('agent-send-btn').addEventListener('click', sendAgentMessage);
         document.getElementById('agent-input').addEventListener('keypress', (e) => { if (e.key === 'Enter') sendAgentMessage(); });
 
-        function sendAgentMessage() {
+        async function sendAgentMessage() {
             const input = document.getElementById('agent-input');
             const text = input.value.trim();
             if (!text || !activeTicketProtocol) return;
@@ -217,9 +241,12 @@
             if (ticket) {
                 ticket.messages.push({ sender: 'agente', text: text });
                 renderMessages();
-                channel.postMessage({ type: 'AGENT_MESSAGE', text: text });
+
+                // Salvar resposta na nuvem
+                await supabase.from('messages').insert([
+                    { protocol: activeTicketProtocol, sender: 'agente', message: text }
+                ]);
             }
-            input.value =.value = '';
             input.value = '';
         }
     </script>
