@@ -101,6 +101,7 @@
 
         let tickets = [];
         let activeTicketProtocol = null;
+        let activeMessageSubscription = null;
 
         function playAlertSound() {
             try {
@@ -125,23 +126,29 @@
                     messages: []
                 }));
                 renderTicketsList();
+                if (tickets.length > 0 && !activeTicketProtocol) {
+                    selectTicket(tickets[0].protocol);
+                }
             }
         }
         loadTickets();
 
+        // Ouvir novos tickets instantaneamente na fila do agente
         supabaseClient
-          .channel('public:tickets')
+          .channel('agent_tickets_global')
           .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tickets' }, payload => {
               playAlertSound();
-              tickets.push({
-                  protocol: payload.new.protocol,
-                  clientName: payload.new.client_name,
-                  document: payload.new.document,
-                  subject: payload.new.subject,
-                  messages: []
-              });
-              renderTicketsList();
-              if (!activeTicketProtocol) selectTicket(payload.new.protocol);
+              if (!tickets.some(t => t.protocol === payload.new.protocol)) {
+                  tickets.push({
+                      protocol: payload.new.protocol,
+                      clientName: payload.new.client_name,
+                      document: payload.new.document,
+                      subject: payload.new.subject,
+                      messages: []
+                  });
+                  renderTicketsList();
+                  if (!activeTicketProtocol) selectTicket(payload.new.protocol);
+              }
           })
           .subscribe();
 
@@ -191,13 +198,22 @@
             renderTicketsList();
             renderMessages();
 
-            supabaseClient
-              .channel('room_agent_' + protocol)
-              .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `protocol=eq.${protocol}` }, payload => {
-                  if (payload.new.sender === 'cliente') {
-                      playAlertSound();
-                      ticket.messages.push({ sender: 'cliente', text: payload.new.message });
-                      renderMessages();
+            // Limpar canal anterior para evitar acúmulo de eventos
+            if (activeMessageSubscription) {
+                supabaseClient.removeChannel(activeMessageSubscription);
+            }
+
+            // Ouvir mensagens instantâneas para a conversa ativa
+            activeMessageSubscription = supabaseClient
+              .channel('agent_messages_' + protocol)
+              .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
+                  if (payload.new.protocol === protocol && payload.new.sender === 'cliente') {
+                      const lastMsg = ticket.messages[ticket.messages.length - 1];
+                      if (!lastMsg || lastMsg.text !== payload.new.message || lastMsg.sender !== 'cliente') {
+                          playAlertSound();
+                          ticket.messages.push({ sender: 'cliente', text: payload.new.message });
+                          renderMessages();
+                      }
                   }
               })
               .subscribe();
@@ -229,20 +245,4 @@
 
         async function sendAgentMessage() {
             const input = document.getElementById('agent-input');
-            const text = input.value.trim();
-            if (!text || !activeTicketProtocol) return;
-
-            const ticket = tickets.find(t => t.protocol === activeTicketProtocol);
-            if (ticket) {
-                ticket.messages.push({ sender: 'agente', text: text });
-                renderMessages();
-
-                await supabaseClient.from('messages').insert([
-                    { protocol: activeTicketProtocol, sender: 'agente', message: text }
-                ]);
-            }
-            input.value = '';
-        }
-    </script>
-</body>
-</html>
+            const text
