@@ -67,4 +67,37 @@
 
             <div class="p-4 bg-matrix-panel border-t border-matrix">
                 <div class="flex gap-2">
-                    <input type
+                    <input type="text" id="agent-input" disabled placeholder="Selecione um atendimento..." 
+                           class="flex-1 bg-slate-950 border border-slate-700 rounded-lg px-4 py-3 text-sm text-white focus:outline-none focus:border-blue-500 disabled:opacity-50">
+                    <button id="agent-send-btn" disabled class="bg-blue-600 hover:bg-blue-500 disabled:bg-slate-800 text-white px-6 rounded-lg font-semibold text-sm transition-all">Enviar</button>
+                </div>
+            </div>
+        </main>
+
+        <!-- FICHA TÉCNICA LATERAL -->
+        <aside class="w-80 bg-matrix-panel border-l border-matrix p-4 flex flex-col gap-4 overflow-y-auto">
+            <h3 class="text-xs font-bold uppercase text-slate-400 tracking-wider">Ficha do Assinante</h3>
+            <div class="bg-matrix-card border border-matrix rounded-xl p-4 space-y-3 text-xs">
+                <div>
+                    <span class="text-slate-400 block">Nome do Cliente</span>
+                    <strong id="info-name" class="text-sm text-white font-semibold">-</strong>
+                </div>
+                <div>
+                    <span class="text-slate-400 block">CPF / Contrato</span>
+                    <strong id="info-doc" class="text-slate-200 font-mono">-</strong>
+                </div>
+                <div>
+                    <span class="text-slate-400 block">Setor Solicitado</span>
+                    <span id="info-subject" class="inline-block bg-blue-600/30 text-blue-300 px-2 py-0.5 rounded mt-1 font-medium">-</span>
+                </div>
+            </div>
+        </aside>
+    </div>
+
+    <script>
+        const SUPABASE_URL = 'https://ftagvfnbooepyvfkvayi.supabase.co';
+        const SUPABASE_KEY = 'sb_publishable_ndm7lv9wfmKqp-w4Om-t3Q_8_s7mhGO';
+        const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+
+        let tickets = [];
+        let activeTicketProtocol = null;
