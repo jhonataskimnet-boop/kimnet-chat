@@ -196,6 +196,7 @@
             document.getElementById('info-doc').innerText = ticket.document;
             document.getElementById('info-subject').innerText = ticket.subject;
 
+            // Carregar mensagens já existentes do banco
             const { data, error } = await supabaseClient.from('messages').select('*').eq('protocol', protocol).order('created_at', { ascending: true });
             if (error) {
                 console.error("Erro ao carregar mensagens do ticket:", error);
@@ -205,27 +206,36 @@
             renderTicketsList();
             renderMessages();
 
+            // Limpar canal anterior de mensagens se existir
             if (activeMessageSubscription) {
                 await supabaseClient.removeChannel(activeMessageSubscription);
                 activeMessageSubscription = null;
             }
 
-            activeMessageSubscription = supabaseClient.channel('agent_room_' + protocol);
+            // Criar canal limpo e dinâmico para escutar todas as mensagens em tempo real
+            activeMessageSubscription = supabaseClient.channel('agent_chat_stream_' + Math.random());
             
             activeMessageSubscription
               .on('postgres_changes', { 
                   event: 'INSERT', 
                   schema: 'public', 
-                  table: 'messages',
-                  filter: `protocol=eq.${protocol}` 
+                  table: 'messages'
               }, payload => {
-                  if (payload.new.sender === 'cliente') {
-                      playAlertSound();
-                      ticket.messages.push({ sender: 'cliente', text: payload.new.message });
-                      renderMessages();
+                  console.log("Evento recebido no WebSocket do agente:", payload.new);
+                  
+                  // Validar se a mensagem pertence ao chat atualmente aberto e veio do cliente
+                  if (payload.new.protocol === activeTicketProtocol && payload.new.sender === 'cliente') {
+                      const lastMsg = ticket.messages[ticket.messages.length - 1];
+                      if (!lastMsg || lastMsg.text !== payload.new.message || lastMsg.sender !== 'cliente') {
+                          playAlertSound();
+                          ticket.messages.push({ sender: 'cliente', text: payload.new.message });
+                          renderMessages();
+                      }
                   }
               })
-              .subscribe();
+              .subscribe((status, err) => {
+                  console.log("Status do canal de chat do agente:", status, err);
+              });
         }
 
         function renderMessages() {
