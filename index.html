@@ -82,10 +82,10 @@
     </div>
 
     <script>
-        // CONFIGURAÇÃO DO SUPABASE (Substitua pelas suas chaves gratuitas do Supabase)
-        const SUPABASE_URL = 'SUA_URL_DO_SUPABASE';
-        const SUPABASE_KEY = 'SUA_CHAVE_ANON_DO_SUPABASE';
-        const supabase = supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        // COLE A SUA URL E CHAVE DO SUPABASE ABAIXO:
+        const SUPABASE_URL = 'https://SEU_PROJETO.supabase.co';
+        const SUPABASE_KEY = 'SUA_CHAVE_ANON_PUBLICA_AQUI';
+        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         let currentProtocol = null;
 
@@ -97,13 +97,12 @@
             const subject = document.getElementById('client-subject').value;
             currentProtocol = 'PROT-' + Math.floor(10000 + Math.random() * 90000);
 
-            // Criar chamado no banco de dados na nuvem
             const { error } = await supabase.from('tickets').insert([
                 { protocol: currentProtocol, client_name: name, document: doc, subject: subject, status: 'open' }
             ]);
 
             if (error) {
-                alert('Erro ao iniciar chat. Verifique as credenciais do Supabase.');
+                alert('Erro ao conectar com o Supabase. Verifique suas credenciais.');
                 return;
             }
 
@@ -113,7 +112,7 @@
 
             appendMessage('sistema', `Olá, ${name}! Seu atendimento foi iniciado sob o protocolo ${currentProtocol}. Aguarde um instante.`);
 
-            // Escutar novas mensagens do agente para este protocolo
+            // Escutar respostas do agente em tempo real
             supabase
               .channel('room_' + currentProtocol)
               .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `protocol=eq.${currentProtocol}` }, payload => {
@@ -134,7 +133,6 @@
 
             appendMessage('cliente', text);
 
-            // Enviar mensagem para a nuvem
             await supabase.from('messages').insert([
                 { protocol: currentProtocol, sender: 'cliente', message: text }
             ]);
