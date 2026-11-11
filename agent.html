@@ -97,7 +97,7 @@
     <script>
         const SUPABASE_URL = 'https://ftagvfnbooepyvfkvayi.supabase.co';
         const SUPABASE_KEY = 'sb_publishable_ndm7lv9wfmKqp-w4Om-t3Q_8_s7mhGO';
-        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         let tickets = [];
         let activeTicketProtocol = null;
@@ -115,7 +115,7 @@
         }
 
         async function loadTickets() {
-            const { data } = await supabase.from('tickets').select('*').eq('status', 'open');
+            const { data } = await supabaseClient.from('tickets').select('*').eq('status', 'open');
             if (data) {
                 tickets = data.map(t => ({
                     protocol: t.protocol,
@@ -129,7 +129,7 @@
         }
         loadTickets();
 
-        supabase
+        supabaseClient
           .channel('public:tickets')
           .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tickets' }, payload => {
               playAlertSound();
@@ -185,13 +185,13 @@
             document.getElementById('info-doc').innerText = ticket.document;
             document.getElementById('info-subject').innerText = ticket.subject;
 
-            const { data } = await supabase.from('messages').select('*').eq('protocol', protocol).order('created_at', { ascending: true });
+            const { data } = await supabaseClient.from('messages').select('*').eq('protocol', protocol).order('created_at', { ascending: true });
             ticket.messages = data ? data.map(m => ({ sender: m.sender, text: m.message })) : [];
 
             renderTicketsList();
             renderMessages();
 
-            supabase
+            supabaseClient
               .channel('room_agent_' + protocol)
               .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `protocol=eq.${protocol}` }, payload => {
                   if (payload.new.sender === 'cliente') {
@@ -237,7 +237,7 @@
                 ticket.messages.push({ sender: 'agente', text: text });
                 renderMessages();
 
-                await supabase.from('messages').insert([
+                await supabaseClient.from('messages').insert([
                     { protocol: activeTicketProtocol, sender: 'agente', message: text }
                 ]);
             }
