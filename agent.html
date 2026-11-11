@@ -102,6 +102,7 @@
         let tickets = [];
         let activeTicketProtocol = null;
         let activeMessageSubscription = null;
+        let pollingInterval = null;
 
         function playAlertSound() {
             try {
@@ -117,44 +118,37 @@
 
         async function loadTickets() {
             const { data, error } = await supabaseClient.from('tickets').select('*').eq('status', 'open');
-            if (error) {
-                console.error("Erro ao carregar tickets:", error);
-                return;
-            }
+            if (error) return;
             if (data) {
-                tickets = data.map(t => ({
-                    protocol: t.protocol,
-                    clientName: t.client_name,
-                    document: t.document,
-                    subject: t.subject,
-                    messages: []
-                }));
-                renderTicketsList();
-                if (tickets.length > 0 && !activeTicketProtocol) {
-                    selectTicket(tickets[0].protocol);
+                const existingProtocols = tickets.map(t => t.protocol);
+                let hasNewTicket = false;
+
+                data.forEach(t => {
+                    if (!existingProtocols.includes(t.protocol)) {
+                        tickets.push({
+                            protocol: t.protocol,
+                            clientName: t.client_name,
+                            document: t.document,
+                            subject: t.subject,
+                            messages: []
+                        });
+                        hasNewTicket = true;
+                    }
+                });
+
+                if (hasNewTicket) {
+                    playAlertSound();
+                    renderTicketsList();
+                    if (!activeTicketProtocol && tickets.length > 0) {
+                        selectTicket(tickets[0].protocol);
+                    }
                 }
             }
         }
+        
+        // Carrega inicialmente e verifica novos tickets a cada 3 segundos na fila
         loadTickets();
-
-        // Ouvir novos tickets globais na fila
-        supabaseClient
-          .channel('agent_tickets_global')
-          .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'tickets' }, payload => {
-              playAlertSound();
-              if (!tickets.some(t => t.protocol === payload.new.protocol)) {
-                  tickets.push({
-                      protocol: payload.new.protocol,
-                      clientName: payload.new.client_name,
-                      document: payload.new.document,
-                      subject: payload.new.subject,
-                      messages: []
-                  });
-                  renderTicketsList();
-                  if (!activeTicketProtocol) selectTicket(payload.new.protocol);
-              }
-          })
-          .subscribe();
+        setInterval(loadTickets, 3000);
 
         function renderTicketsList() {
             const container = document.getElementById('tickets-list');
@@ -196,46 +190,51 @@
             document.getElementById('info-doc').innerText = ticket.document;
             document.getElementById('info-subject').innerText = ticket.subject;
 
-            // Carregar mensagens já existentes do banco
-            const { data, error } = await supabaseClient.from('messages').select('*').eq('protocol', protocol).order('created_at', { ascending: true });
-            if (error) {
-                console.error("Erro ao carregar mensagens do ticket:", error);
-            }
-            ticket.messages = data ? data.map(m => ({ sender: m.sender, text: m.message })) : [];
+            await fetchMessages(ticket);
 
-            renderTicketsList();
-            renderMessages();
-
-            // Limpar canal anterior de mensagens se existir
+            // Limpar canal anterior de WebSocket se existir
             if (activeMessageSubscription) {
                 await supabaseClient.removeChannel(activeMessageSubscription);
                 activeMessageSubscription = null;
             }
 
-            // Criar canal limpo e dinâmico para escutar todas as mensagens em tempo real
-            activeMessageSubscription = supabaseClient.channel('agent_chat_stream_' + Math.random());
-            
-            activeMessageSubscription
-              .on('postgres_changes', { 
-                  event: 'INSERT', 
-                  schema: 'public', 
-                  table: 'messages'
-              }, payload => {
-                  console.log("Evento recebido no WebSocket do agente:", payload.new);
-                  
-                  // Validar se a mensagem pertence ao chat atualmente aberto e veio do cliente
+            // Parar polling anterior se houver
+            if (pollingInterval) clearInterval(pollingInterval);
+
+            // Sincronização em tempo real via WebSocket
+            activeMessageSubscription = supabaseClient.channel('agent_stream_' + Math.random())
+              .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages' }, payload => {
                   if (payload.new.protocol === activeTicketProtocol && payload.new.sender === 'cliente') {
-                      const lastMsg = ticket.messages[ticket.messages.length - 1];
-                      if (!lastMsg || lastMsg.text !== payload.new.message || lastMsg.sender !== 'cliente') {
-                          playAlertSound();
-                          ticket.messages.push({ sender: 'cliente', text: payload.new.message });
-                          renderMessages();
-                      }
+                      fetchMessages(ticket, true);
                   }
               })
-              .subscribe((status, err) => {
-                  console.log("Status do canal de chat do agente:", status, err);
-              });
+              .subscribe();
+
+            // Polling de segurança (verifica novas mensagens a cada 2 segundos no banco de dados)
+            pollingInterval = setInterval(() => {
+                if (activeTicketProtocol === protocol) {
+                    fetchMessages(ticket, true);
+                }
+            }, 2000);
+        }
+
+        async function fetchMessages(ticket, checkNewOnly = false) {
+            const { data, error } = await supabaseClient.from('messages').select('*').eq('protocol', ticket.protocol).order('created_at', { ascending: true });
+            if (error || !data) return;
+
+            const newMessages = data.map(m => ({ sender: m.sender, text: m.message }));
+            
+            if (checkNewOnly && newMessages.length > ticket.messages.length) {
+                const lastMsg = newMessages[newMessages.length - 1];
+                if (lastMsg.sender === 'cliente') {
+                    playAlertSound();
+                }
+                ticket.messages = newMessages;
+                renderMessages();
+            } else if (!checkNewOnly) {
+                ticket.messages = newMessages;
+                renderMessages();
+            }
         }
 
         function renderMessages() {
@@ -244,6 +243,7 @@
             const ticket = tickets.find(t => t.protocol === activeTicketProtocol);
             if (!ticket) return;
 
+            ticket.messages.features = true; // dummy to prevent reference warnings
             ticket.messages.forEach(msg => {
                 const msgDiv = document.createElement('div');
                 const isAgent = msg.sender === 'agente';
@@ -269,19 +269,19 @@
 
             const ticket = tickets.find(t => t.protocol === activeTicketProtocol);
             if (ticket) {
-                ticket.messages.push({ sender: 'agente', text: text });
-                renderMessages();
+                input.value = ''; // limpa antes para agilizar
 
                 const { error } = await supabaseClient.from('messages').insert([
                     { protocol: activeTicketProtocol, sender: 'agente', message: text }
                 ]);
 
                 if (error) {
-                    console.error("Erro ao enviar mensagem do agente:", error);
+                    console.error("Erro ao enviar:", error);
                     alert("Erro ao enviar mensagem: " + error.message);
+                } else {
+                    await fetchMessages(ticket);
                 }
             }
-            input.value = '';
         }
     </script>
 </body>
