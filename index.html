@@ -84,7 +84,7 @@
     <script>
         const SUPABASE_URL = 'https://ftagvfnbooepyvfkvayi.supabase.co';
         const SUPABASE_KEY = 'sb_publishable_ndm7lv9wfmKqp-w4Om-t3Q_8_s7mhGO';
-        const supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
+        const supabaseClient = window.supabase.createClient(SUPABASE_URL, SUPABASE_KEY);
 
         let currentProtocol = null;
 
@@ -96,7 +96,7 @@
             const subject = document.getElementById('client-subject').value;
             currentProtocol = 'PROT-' + Math.floor(10000 + Math.random() * 90000);
 
-            const { error } = await supabase.from('tickets').insert([
+            const { error } = await supabaseClient.from('tickets').insert([
                 { protocol: currentProtocol, client_name: name, document: doc, subject: subject, status: 'open' }
             ]);
 
@@ -111,7 +111,7 @@
 
             appendMessage('sistema', `Olá, ${name}! Seu atendimento foi iniciado sob o protocolo ${currentProtocol}. Aguarde um instante.`);
 
-            supabase
+            supabaseClient
               .channel('room_' + currentProtocol)
               .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `protocol=eq.${currentProtocol}` }, payload => {
                   if (payload.new.sender === 'agente') {
@@ -131,7 +131,7 @@
 
             appendMessage('cliente', text);
 
-            await supabase.from('messages').insert([
+            await supabaseClient.from('messages').insert([
                 { protocol: currentProtocol, sender: 'cliente', message: text }
             ]);
 
